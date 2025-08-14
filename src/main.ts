@@ -26,7 +26,9 @@ async function bootstrap() {
       'https://liberdus.com',
       'https://www.liberdus.com',
       'http://liberdus.com',
-      'http://www.liberdus.com'
+      'http://www.liberdus.com',
+      'https://arimaa.com',
+      'http://arimaa.com'
     ],
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
