@@ -44,7 +44,6 @@ export class FaucetService {
       const result = await this.blockchainService.transferFunds(
         faucetRequest.userAddress,
         this.FAUCET_AMOUNT,
-        `Faucet request for ${faucetRequest.username}`,
       );
 
       // Update stats with success
