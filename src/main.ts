@@ -23,11 +23,15 @@ async function bootstrap() {
   // Enable CORS for frontend integration
   app.enableCors({
     origin: process.env.ALLOWED_ORIGINS?.split(',') || [
-      'http://localhost:3000',
-      'http://localhost:3001',
+      'https://liberdus.com',
+      'https://www.liberdus.com',
+      'http://liberdus.com',
+      'http://www.liberdus.com'
     ],
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
     credentials: true,
+    optionsSuccessStatus: 200, // For legacy browser support
   });
 
   const port = process.env.PORT || 3000;
