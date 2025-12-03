@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, ValidateNested } from 'class-validator';
+import { IsString, IsNotEmpty, ValidateNested, IsOptional } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class SignatureDto {
@@ -13,8 +13,8 @@ export class SignatureDto {
 
 export class FaucetRequestDto {
   @IsString()
-  @IsNotEmpty()
-  nodeAddress: string;
+  @IsOptional()
+  nodeAddress?: string;
 
   @IsString()
   @IsNotEmpty()
@@ -23,6 +23,10 @@ export class FaucetRequestDto {
   @IsString()
   @IsNotEmpty()
   userAddress: string;
+
+  @IsString()
+  @IsNotEmpty()
+  networkId: string;
 
   @ValidateNested()
   @Type(() => SignatureDto)

@@ -43,21 +43,18 @@ interface User {
   secretKey: string;
 }
 
+export interface NetworkConfig {
+  networkId: string;
+  protocols: string;
+  host: string;
+  faucetAddress: string;
+  faucetPrivateKey: string;
+  archiverUrl: string;
+}
+
 @Injectable()
 export class BlockchainService {
   private readonly logger = new Logger(BlockchainService.name);
-  private readonly PROTOCOL = process.env.BLOCKCHAIN_PROTOCOL || 'http';
-  private readonly HOST = process.env.BLOCKCHAIN_HOST || 'localhost:9001';
-  private readonly ARCHIVER_HOST =
-    process.env.ARCHIVER_HOST || 'localhost:4000';
-  private readonly ARCHIVER_PROTOCOL = process.env.ARCHIVER_PROTOCOL || 'http';
-  private readonly networkId = process.env.NETWORK_ID || '1';
-
-  // Mock user - in production this should be loaded from secure config
-  private readonly FAUCET_ACCOUNT: User = {
-    address: process.env.FAUCET_ADDRESS || '0x' + '1'.repeat(64),
-    secretKey: process.env.FAUCET_PRIVATE_KEY || '0x' + '1'.repeat(64),
-  };
 
   constructor() {
     // Crypto is already initialized globally
@@ -69,30 +66,31 @@ export class BlockchainService {
   async transferFunds(
     targetAddress: string,
     amount: number,
+    networkConfig: NetworkConfig,
     memo?: string,
   ): Promise<any> {
     try {
-      const resolvedAddress = await this.getAddress(targetAddress);
+      const resolvedAddress = await this.getAddress(targetAddress, networkConfig);
       const amountInWei = this.libToWei(amount);
 
       this.logger.log(`Sending ${amountInWei} to ${resolvedAddress}`);
 
       const tx: TransactionData = {
         type: 'transfer',
-        from: this.FAUCET_ACCOUNT.address,
+        from: networkConfig.faucetAddress,
         to: resolvedAddress,
         amount: amountInWei,
         chatId: this.calculateChatId(
           resolvedAddress,
-          this.FAUCET_ACCOUNT.address,
+          networkConfig.faucetAddress,
         ),
         memo: memo || null,
         timestamp: Date.now(),
       };
 
-      this.signEthereumTx(tx, { secretKey: this.FAUCET_ACCOUNT.secretKey });
+      this.signEthereumTx(tx, { secretKey: networkConfig.faucetPrivateKey }, networkConfig);
       this.logger.log('Transaction data before injection:', tx);
-      const result = await this.injectTx(tx);
+      const result = await this.injectTx(tx, networkConfig);
       if (!result || !result.success) {
         this.logger.error('Transaction injection failed:', result);
         throw new Error(
@@ -107,10 +105,10 @@ export class BlockchainService {
     }
   }
 
-  async getStandbyNodelist(): Promise<StandbyNode[]> {
+  async getStandbyNodelist(networkConfig: NetworkConfig): Promise<StandbyNode[]> {
     try {
       const response = await axios.get(
-        `${this.ARCHIVER_PROTOCOL}://${this.ARCHIVER_HOST}/full-nodelist?standbyOnly=true`,
+        `${networkConfig.archiverUrl}/full-nodelist?standbyOnly=true`,
       );
       const { nodeList } = response.data;
 
@@ -178,9 +176,9 @@ export class BlockchainService {
     }
   }
 
-  async isValidStandbyNode(address: string): Promise<boolean> {
+  async isValidStandbyNode(address: string, networkConfig: NetworkConfig): Promise<boolean> {
     try {
-      const standbyNodes = await this.getStandbyNodelist();
+      const standbyNodes = await this.getStandbyNodelist(networkConfig);
       return standbyNodes.some(
         (node) => node.publicKey.toLowerCase() === address.toLowerCase(),
       );
@@ -190,10 +188,10 @@ export class BlockchainService {
     }
   }
 
-  async getAccount(address: string): Promise<any> {
+  async getAccount(address: string, networkConfig: NetworkConfig): Promise<any> {
     try {
       const response = await axios.get(
-        `${this.PROTOCOL}://${this.HOST}/account/${address}`,
+        `${networkConfig.protocols}://${networkConfig.host}/account/${address}`,
       );
       const { account } = response.data;
 
@@ -208,7 +206,7 @@ export class BlockchainService {
     }
   }
 
-  async getAddress(handle: string): Promise<string> {
+  async getAddress(handle: string, networkConfig: NetworkConfig): Promise<string> {
     // If it's already a 64-character address, return as is
     if (handle.length === 64) {
       return handle;
@@ -217,7 +215,7 @@ export class BlockchainService {
     try {
       const hashedHandle = crypto.hash(handle);
       const response = await axios.get(
-        `${this.PROTOCOL}://${this.HOST}/address/${hashedHandle}`,
+        `${networkConfig.protocols}://${networkConfig.host}/address/${hashedHandle}`,
       );
       const { address, error } = response.data;
 
@@ -244,12 +242,13 @@ export class BlockchainService {
   private signEthereumTx(
     tx: TransactionData,
     keys: { secretKey: string },
+    networkConfig: NetworkConfig,
   ): void {
     if (!keys) {
       throw new Error('Keys are required for signing');
     }
 
-    tx.networkId = this.networkId;
+    tx.networkId = networkConfig.networkId;
 
     // Create a copy of the tx without any existing sign field
     const dataToSign = Object.assign({}, tx);
@@ -267,7 +266,7 @@ export class BlockchainService {
 
       // Add signature to transaction
       tx.sign = {
-        owner: this.FAUCET_ACCOUNT.address,
+        owner: networkConfig.faucetAddress,
         sig: signature,
       };
     } catch (error) {
@@ -279,13 +278,13 @@ export class BlockchainService {
     return ethAddress.slice(2).toLowerCase() + '0'.repeat(24);
   }
 
-  private async injectTx(tx: TransactionData): Promise<TransactionResponse> {
+  private async injectTx(tx: TransactionData, networkConfig: NetworkConfig): Promise<TransactionResponse> {
     const data = Utils.safeStringify(tx);
     this.logger.log('Tx data:', data);
 
     try {
       const response = await axios.post(
-        `${this.PROTOCOL}://${this.HOST}/inject`,
+        `${networkConfig.protocols}://${networkConfig.host}/inject`,
         {
           tx: data,
         },

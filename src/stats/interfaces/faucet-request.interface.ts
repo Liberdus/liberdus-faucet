@@ -1,6 +1,6 @@
 export interface FaucetRequest {
   id: string;
-  nodeAddress: string;
+  nodeAddress?: string;
   username: string;
   userAddress: string;
   amount: number;

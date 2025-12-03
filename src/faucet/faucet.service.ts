@@ -1,19 +1,52 @@
-import { Injectable, Logger, BadRequestException } from '@nestjs/common';
-import { BlockchainService } from '../blockchain/blockchain.service';
+import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
+import { BlockchainService, NetworkConfig } from '../blockchain/blockchain.service';
 import { StatsService } from '../stats/stats.service';
 import { FaucetRequestDto } from '../common/dto/faucet-request.dto';
+import * as fs from 'fs';
+import * as path from 'path';
 
 @Injectable()
 export class FaucetService {
   private readonly logger = new Logger(FaucetService.name);
   private readonly FAUCET_AMOUNT = parseFloat(
     process.env.FAUCET_AMOUNT || '10',
-  ); // Default 10 tokens
+  ); // Default 10 tokens for node faucet
+  private readonly USER_FAUCET_AMOUNT = parseFloat(
+    process.env.USER_FAUCET_AMOUNT || '100',
+  ); // Default 100 tokens for user faucet
+  private readonly USER_MAX_BALANCE = parseFloat(
+    process.env.USER_MAX_BALANCE || '100',
+  ); // Default 100 tokens max balance for user faucet
+  private readonly networks: Record<string, NetworkConfig>;
 
   constructor(
     private readonly blockchainService: BlockchainService,
     private readonly statsService: StatsService,
-  ) {}
+  ) {
+    // Load networks.json
+    const networksPath = path.join(process.cwd(), 'networks.json');
+    const networksData = fs.readFileSync(networksPath, 'utf-8');
+    const networksJson = JSON.parse(networksData);
+    
+    // Transform the networks.json structure to include networkId
+    this.networks = Object.entries(networksJson).reduce((acc, [networkId, config]: [string, any]) => {
+      acc[networkId] = {
+        networkId,
+        ...config,
+      };
+      return acc;
+    }, {} as Record<string, NetworkConfig>);
+    
+    this.logger.log(`Loaded ${Object.keys(this.networks).length} network configurations`);
+  }
+
+  private getNetworkConfig(networkId: string): NetworkConfig {
+    const config = this.networks[networkId];
+    if (!config) {
+      throw new NotFoundException(`Network with ID '${networkId}' not found`);
+    }
+    return config;
+  }
 
   async processFaucetRequest(faucetRequest: FaucetRequestDto): Promise<{
     success: boolean;
@@ -21,12 +54,20 @@ export class FaucetService {
     txHash?: string;
     message: string;
   }> {
+    // Determine faucet type: node faucet if nodeAddress is provided, otherwise user faucet
+    const isNodeFaucet = !!faucetRequest.nodeAddress;
+    const faucetType = isNodeFaucet ? 'node' : 'user';
+    const faucetAmount = isNodeFaucet ? this.FAUCET_AMOUNT : this.USER_FAUCET_AMOUNT;
+
     this.logger.log(
-      `Processing faucet request for user: ${faucetRequest.username}`,
+      `Processing ${faucetType} faucet request for user: ${faucetRequest.username} on network: ${faucetRequest.networkId}`,
     );
 
+    // Validate network ID and get configuration
+    const networkConfig = this.getNetworkConfig(faucetRequest.networkId);
+
     // Validate the request (basic validation - could be enhanced with signature verification)
-    const validateResult = await this.validateRequest(faucetRequest);
+    const validateResult = await this.validateRequest(faucetRequest, networkConfig, isNodeFaucet);
     if (validateResult.success === false) {
       throw new BadRequestException(validateResult.reason || 'Invalid request');
     }
@@ -36,14 +77,15 @@ export class FaucetService {
       faucetRequest.nodeAddress,
       faucetRequest.username,
       faucetRequest.userAddress,
-      this.FAUCET_AMOUNT,
+      faucetAmount,
     );
 
     try {
       // Process the blockchain transaction
       const result = await this.blockchainService.transferFunds(
         faucetRequest.userAddress,
-        this.FAUCET_AMOUNT,
+        faucetAmount,
+        networkConfig,
       );
 
       // Update stats with success
@@ -59,7 +101,7 @@ export class FaucetService {
         success: true,
         requestId: request.id,
         txHash: result.txHash || result.hash,
-        message: `Successfully sent ${this.FAUCET_AMOUNT} tokens to ${faucetRequest.userAddress}`,
+        message: `Successfully sent ${faucetAmount} tokens to ${faucetRequest.userAddress}`,
       };
     } catch (error) {
       this.logger.error(
@@ -85,12 +127,14 @@ export class FaucetService {
 
   private async validateRequest(
     request: FaucetRequestDto,
+    networkConfig: NetworkConfig,
+    isNodeFaucet: boolean,
   ): Promise<{ success: boolean; reason?: string }> {
     // Basic validation
     if (
-      !request.nodeAddress ||
       !request.username ||
       !request.userAddress ||
+      !request.networkId ||
       !request.sign
     ) {
       return { success: false, reason: 'Missing required fields' };
@@ -111,8 +155,26 @@ export class FaucetService {
       return { success: false, reason: 'Invalid signature' };
     }
 
+    if (isNodeFaucet) {
+      // Node faucet validation
+      return this.validateNodeFaucetRequest(request, networkConfig);
+    } else {
+      // User faucet validation
+      return this.validateUserFaucetRequest(request, networkConfig);
+    }
+  }
+
+  private async validateNodeFaucetRequest(
+    request: FaucetRequestDto,
+    networkConfig: NetworkConfig,
+  ): Promise<{ success: boolean; reason?: string }> {
+    if (!request.nodeAddress) {
+      return { success: false, reason: 'Node address is required for node faucet' };
+    }
+
     const isStandbyNode = await this.blockchainService.isValidStandbyNode(
       request.nodeAddress,
+      networkConfig,
     );
     if (!isStandbyNode) {
       this.logger.warn(
@@ -123,8 +185,10 @@ export class FaucetService {
         reason: 'Node address is not a valid standby node',
       };
     }
+    
     const nodeAccount = await this.blockchainService.getAccount(
       request.nodeAddress,
+      networkConfig,
     );
     if (nodeAccount) {
       this.logger.log(
@@ -138,8 +202,10 @@ export class FaucetService {
         return { success: false, reason: 'Node already has sufficient stake' };
       }
     }
+    
     const nomineeAccount = await this.blockchainService.getAccount(
       request.userAddress,
+      networkConfig,
     );
     if (!nomineeAccount) {
       this.logger.warn(
@@ -162,7 +228,45 @@ export class FaucetService {
     }
 
     this.logger.log(
-      `Validating request for user: ${request.username}, Standby Node: ${isStandbyNode}, Nominee Account: ${JSON.stringify(nomineeAccount)}`,
+      `Validating node faucet request for user: ${request.username}, Standby Node: ${isStandbyNode}, Nominee Account: ${JSON.stringify(nomineeAccount)}`,
+    );
+
+    return { success: true };
+  }
+
+  private async validateUserFaucetRequest(
+    request: FaucetRequestDto,
+    networkConfig: NetworkConfig,
+  ): Promise<{ success: boolean; reason?: string }> {
+    // Get user account
+    const userAccount = await this.blockchainService.getAccount(
+      request.userAddress,
+      networkConfig,
+    );
+
+    if (!userAccount) {
+      this.logger.warn(
+        `User account not found for address: ${request.userAddress}`,
+      );
+      return { success: false, reason: 'User account not found' };
+    }
+
+    // Check user balance
+    const balance = BigInt('0x' + userAccount.data.balance.value);
+    const maxBalanceInWei = this.blockchainService.libToWei(this.USER_MAX_BALANCE);
+
+    if (balance >= maxBalanceInWei) {
+      this.logger.warn(
+        `User ${request.userAddress} has balance ${balance} which exceeds maximum ${maxBalanceInWei}`,
+      );
+      return {
+        success: false,
+        reason: `User balance exceeds maximum allowed balance of ${this.USER_MAX_BALANCE} LIB`,
+      };
+    }
+
+    this.logger.log(
+      `Validating user faucet request for user: ${request.username}, Balance: ${balance}, Max Balance: ${maxBalanceInWei}`,
     );
 
     return { success: true };

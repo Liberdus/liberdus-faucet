@@ -7,7 +7,7 @@ export class StatsService {
   private readonly requests: Map<string, FaucetRequest> = new Map();
 
   createRequest(
-    nodeAddress: string,
+    nodeAddress: string | undefined,
     username: string,
     userAddress: string,
     amount: number,

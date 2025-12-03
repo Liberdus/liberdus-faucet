@@ -93,6 +93,11 @@ CRYPTO_KEY=69fa4195670576c0160d660c3be36556ff8d504725be8a59b5a96509e0c994bc
 
 # Server Configuration
 PORT=3000
+
+# CORS Configuration (optional)
+# Comma-separated list of allowed origins. If not set, defaults to liberdus.com domains.
+# Example: ALLOWED_ORIGINS=https://app.liberdus.com,https://faucet.liberdus.com
+# ALLOWED_ORIGINS=
 ```
 
 ## Testing
