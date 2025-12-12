@@ -55,12 +55,23 @@ export class FaucetService {
     txHash?: string;
     message: string;
   }> {
-    if (this.processingUsers.has(faucetRequest.userAddress)) {
+    const normalizedAddress = faucetRequest.userAddress.toLowerCase();
+    const hasProcessing = this.processingUsers.has(normalizedAddress);
+    
+    this.logger.log(`hasProcessing for ${normalizedAddress}: ${hasProcessing}`);
+    this.logger.log(`Current processing users before check: ${Array.from(this.processingUsers).join(', ')}`);
+
+    if (this.processingUsers.has(normalizedAddress)) {
+      this.logger.warn(
+        `Blocked concurrent request for address: ${normalizedAddress}`,
+      );
       throw new BadRequestException(
         'A faucet request is already in progress for this address. Please wait.',
       );
     }
-    this.processingUsers.add(faucetRequest.userAddress);
+    this.processingUsers.add(normalizedAddress);
+    this.logger.log(`User address ${normalizedAddress} added to processing set`);
+    this.logger.log(`Current processing users: ${Array.from(this.processingUsers).join(', ')}`);
 
     try {
       // Determine faucet type: node faucet if nodeAddress is provided, otherwise user faucet
@@ -154,7 +165,11 @@ export class FaucetService {
       };
     }
     } finally {
-      this.processingUsers.delete(faucetRequest.userAddress);
+      setTimeout(() => {
+        this.processingUsers.delete(normalizedAddress);
+        this.logger.log(`User address ${normalizedAddress} removed from processing set after timeout`);
+        this.logger.log(`Current processing users: ${Array.from(this.processingUsers).join(', ')}`);
+      }, 10000); // Delay removal to ensure processing is fully complete
     }
   }
 
