@@ -49,6 +49,8 @@ export interface NetworkConfig {
   host: string;
   faucetAddress: string;
   faucetPrivateKey: string;
+  privateFaucetAddress?: string;
+  privateFaucetPrivateKey?: string;
   archiverUrl: string;
 }
 
@@ -68,6 +70,7 @@ export class BlockchainService {
     amount: number,
     networkConfig: NetworkConfig,
     memo?: string,
+    usePrivateFaucet: boolean = false,
   ): Promise<any> {
     try {
       const resolvedAddress = await this.getAddress(targetAddress, networkConfig);
@@ -75,20 +78,35 @@ export class BlockchainService {
 
       this.logger.log(`Sending ${amountInWei} to ${resolvedAddress}`);
 
+      const faucetAddress = usePrivateFaucet
+        ? networkConfig.privateFaucetAddress
+        : networkConfig.faucetAddress;
+      const faucetPrivateKey = usePrivateFaucet
+        ? networkConfig.privateFaucetPrivateKey
+        : networkConfig.faucetPrivateKey;
+
+      if (!faucetAddress || !faucetPrivateKey) {
+        throw new Error(
+          `Faucet credentials missing for ${usePrivateFaucet ? 'private' : 'public'} faucet`,
+        );
+      }
+
       const tx: TransactionData = {
         type: 'transfer',
-        from: networkConfig.faucetAddress,
+        from: faucetAddress,
         to: resolvedAddress,
         amount: amountInWei,
-        chatId: this.calculateChatId(
-          resolvedAddress,
-          networkConfig.faucetAddress,
-        ),
+        chatId: this.calculateChatId(resolvedAddress, faucetAddress),
         memo: memo || null,
         timestamp: Date.now(),
       };
 
-      this.signEthereumTx(tx, { secretKey: networkConfig.faucetPrivateKey }, networkConfig);
+      this.signEthereumTx(
+        tx,
+        { secretKey: faucetPrivateKey },
+        networkConfig,
+        faucetAddress,
+      );
       this.logger.log('Transaction data before injection:', tx);
       const result = await this.injectTx(tx, networkConfig);
       if (!result || !result.success) {
@@ -243,6 +261,7 @@ export class BlockchainService {
     tx: TransactionData,
     keys: { secretKey: string },
     networkConfig: NetworkConfig,
+    ownerAddress: string,
   ): void {
     if (!keys) {
       throw new Error('Keys are required for signing');
@@ -266,7 +285,7 @@ export class BlockchainService {
 
       // Add signature to transaction
       tx.sign = {
-        owner: networkConfig.faucetAddress,
+        owner: ownerAddress,
         sig: signature,
       };
     } catch (error) {

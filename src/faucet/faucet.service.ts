@@ -8,6 +8,7 @@ import * as path from 'path';
 @Injectable()
 export class FaucetService {
   private readonly logger = new Logger(FaucetService.name);
+  private readonly processingUsers = new Set<string>();
   private readonly FAUCET_AMOUNT = parseFloat(
     process.env.FAUCET_AMOUNT || '10',
   ); // Default 10 tokens for node faucet
@@ -54,8 +55,16 @@ export class FaucetService {
     txHash?: string;
     message: string;
   }> {
-    // Determine faucet type: node faucet if nodeAddress is provided, otherwise user faucet
-    const isNodeFaucet = !!faucetRequest.nodeAddress;
+    if (this.processingUsers.has(faucetRequest.userAddress)) {
+      throw new BadRequestException(
+        'A faucet request is already in progress for this address. Please wait.',
+      );
+    }
+    this.processingUsers.add(faucetRequest.userAddress);
+
+    try {
+      // Determine faucet type: node faucet if nodeAddress is provided, otherwise user faucet
+      const isNodeFaucet = !!faucetRequest.nodeAddress;
     const faucetType = isNodeFaucet ? 'node' : 'user';
     const faucetAmount = isNodeFaucet ? this.FAUCET_AMOUNT : this.USER_FAUCET_AMOUNT;
 
@@ -81,11 +90,32 @@ export class FaucetService {
     );
 
     try {
+      // Check if user account is private
+      let isPrivate = false;
+      try {
+        const account = await this.blockchainService.getAccount(
+          faucetRequest.userAddress,
+          networkConfig,
+        );
+        if (account && account.private) {
+          isPrivate = true;
+          this.logger.log(
+            `User ${faucetRequest.username} has a private account. Using private faucet.`,
+          );
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Failed to fetch account info for ${faucetRequest.userAddress}. Defaulting to public faucet. Error: ${error.message}`,
+        );
+      }
+
       // Process the blockchain transaction
       const result = await this.blockchainService.transferFunds(
         faucetRequest.userAddress,
         faucetAmount,
         networkConfig,
+        undefined,
+        isPrivate,
       );
 
       // Update stats with success
@@ -122,6 +152,9 @@ export class FaucetService {
         requestId: request.id,
         message: `Failed to process faucet request: ${error.message}`,
       };
+    }
+    } finally {
+      this.processingUsers.delete(faucetRequest.userAddress);
     }
   }
 
