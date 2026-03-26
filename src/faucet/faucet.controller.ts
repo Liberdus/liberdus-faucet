@@ -1,5 +1,5 @@
 import { Controller, Post, Body, Get, Param, Logger, Req } from '@nestjs/common';
-import { Request } from 'express';
+import type { Request } from 'express';
 import { FaucetService } from './faucet.service';
 import { FaucetRequestDto } from '../common/dto/faucet-request.dto';
 
