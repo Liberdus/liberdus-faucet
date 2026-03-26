@@ -1,4 +1,5 @@
-import { Controller, Post, Body, Get, Param, Logger } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Logger, Req } from '@nestjs/common';
+import { Request } from 'express';
 import { FaucetService } from './faucet.service';
 import { FaucetRequestDto } from '../common/dto/faucet-request.dto';
 
@@ -9,12 +10,18 @@ export class FaucetController {
   constructor(private readonly faucetService: FaucetService) {}
 
   @Post()
-  async requestFaucet(@Body() faucetRequest: FaucetRequestDto) {
-    this.logger.log(`Received faucet request from ${faucetRequest.username}`);
+  async requestFaucet(
+    @Body() faucetRequest: FaucetRequestDto,
+    @Req() request: Request,
+  ) {
+    const clientIp = this.getClientIp(request);
+    this.logger.log(
+      `Received faucet request from ${faucetRequest.username} at IP ${clientIp}`,
+    );
 
     try {
       const result =
-        await this.faucetService.processFaucetRequest(faucetRequest);
+        await this.faucetService.processFaucetRequest(faucetRequest, clientIp);
       return result;
     } catch (error) {
       this.logger.error('Error processing faucet request:', error);
@@ -43,5 +50,18 @@ export class FaucetController {
       timestamp: new Date().toISOString(),
       service: 'liberdus-faucet',
     };
+  }
+
+  private getClientIp(request: Request): string {
+    const forwardedFor = request.headers['x-forwarded-for'];
+    if (typeof forwardedFor === 'string') {
+      return forwardedFor.split(',')[0].trim();
+    }
+
+    if (Array.isArray(forwardedFor) && forwardedFor.length > 0) {
+      return forwardedFor[0].split(',')[0].trim();
+    }
+
+    return request.ip || request.socket.remoteAddress || 'unknown';
   }
 }

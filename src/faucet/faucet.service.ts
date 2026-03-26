@@ -9,6 +9,11 @@ import * as path from 'path';
 export class FaucetService {
   private readonly logger = new Logger(FaucetService.name);
   private readonly processingUsers = new Set<string>();
+  private readonly ipCooldowns = new Map<string, number>();
+  private readonly IP_COOLDOWN_MS = parseInt(
+    process.env.IP_COOLDOWN_MS || '86400000',
+    10,
+  );
   private readonly FAUCET_AMOUNT = parseFloat(
     process.env.FAUCET_AMOUNT || '10',
   ); // Default 10 tokens for node faucet
@@ -49,13 +54,17 @@ export class FaucetService {
     return config;
   }
 
-  async processFaucetRequest(faucetRequest: FaucetRequestDto): Promise<{
+  async processFaucetRequest(
+    faucetRequest: FaucetRequestDto,
+    clientIp: string,
+  ): Promise<{
     success: boolean;
     requestId: string;
     txHash?: string;
     message: string;
   }> {
     const normalizedAddress = faucetRequest.userAddress.toLowerCase();
+    const normalizedIp = this.normalizeIp(clientIp);
     const hasProcessing = this.processingUsers.has(normalizedAddress);
     
     this.logger.log(`hasProcessing for ${normalizedAddress}: ${hasProcessing}`);
@@ -74,6 +83,8 @@ export class FaucetService {
     this.logger.log(`Current processing users: ${Array.from(this.processingUsers).join(', ')}`);
 
     try {
+      this.assertIpCooldown(normalizedIp);
+
       // Determine faucet type: node faucet if nodeAddress is provided, otherwise user faucet
       const isNodeFaucet = !!faucetRequest.nodeAddress;
     const faucetType = isNodeFaucet ? 'node' : 'user';
@@ -135,6 +146,7 @@ export class FaucetService {
         'completed',
         result.txHash || result.hash,
       );
+      this.recordIpUsage(normalizedIp);
 
       this.logger.log(`Faucet request completed for ${faucetRequest.username}`);
 
@@ -328,5 +340,50 @@ export class FaucetService {
   // Method to get request by ID
   getRequest(requestId: string) {
     return this.statsService.getRequest(requestId);
+  }
+
+  private normalizeIp(ipAddress: string): string {
+    if (!ipAddress) {
+      return 'unknown';
+    }
+
+    if (ipAddress.startsWith('::ffff:')) {
+      return ipAddress.slice(7);
+    }
+
+    return ipAddress;
+  }
+
+  private assertIpCooldown(ipAddress: string): void {
+    if (ipAddress === 'unknown') {
+      return;
+    }
+
+    const lastRequestAt = this.ipCooldowns.get(ipAddress);
+    if (!lastRequestAt) {
+      return;
+    }
+
+    const elapsedMs = Date.now() - lastRequestAt;
+    if (elapsedMs >= this.IP_COOLDOWN_MS) {
+      this.ipCooldowns.delete(ipAddress);
+      return;
+    }
+
+    const retryAt = new Date(
+      lastRequestAt + this.IP_COOLDOWN_MS,
+    ).toISOString();
+    throw new BadRequestException(
+      `This IP address has already used the faucet. Try again after ${retryAt}.`,
+    );
+  }
+
+  private recordIpUsage(ipAddress: string): void {
+    if (ipAddress === 'unknown') {
+      return;
+    }
+
+    this.ipCooldowns.set(ipAddress, Date.now());
+    this.logger.log(`Recorded faucet cooldown for IP ${ipAddress}`);
   }
 }
