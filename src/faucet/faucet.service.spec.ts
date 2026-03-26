@@ -40,6 +40,7 @@ describe('FaucetService IP cooldown', () => {
       statsService,
       processingUsers: new Set<string>(),
       ipCooldowns: new Map<string, number>(),
+      IP_COOLDOWN_MS: 24 * 60 * 60 * 1000,
       FAUCET_AMOUNT: 10,
       USER_FAUCET_AMOUNT: 100,
       USER_MAX_BALANCE: 100,

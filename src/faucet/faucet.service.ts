@@ -65,6 +65,8 @@ export class FaucetService {
   }> {
     const normalizedAddress = faucetRequest.userAddress.toLowerCase();
     const normalizedIp = this.normalizeIp(clientIp);
+    this.assertIpCooldown(normalizedIp);
+
     const hasProcessing = this.processingUsers.has(normalizedAddress);
     
     this.logger.log(`hasProcessing for ${normalizedAddress}: ${hasProcessing}`);
@@ -83,8 +85,6 @@ export class FaucetService {
     this.logger.log(`Current processing users: ${Array.from(this.processingUsers).join(', ')}`);
 
     try {
-      this.assertIpCooldown(normalizedIp);
-
       // Determine faucet type: node faucet if nodeAddress is provided, otherwise user faucet
       const isNodeFaucet = !!faucetRequest.nodeAddress;
     const faucetType = isNodeFaucet ? 'node' : 'user';
@@ -177,11 +177,12 @@ export class FaucetService {
       };
     }
     } finally {
-      setTimeout(() => {
+      const cleanupTimer = setTimeout(() => {
         this.processingUsers.delete(normalizedAddress);
         this.logger.log(`User address ${normalizedAddress} removed from processing set after timeout`);
         this.logger.log(`Current processing users: ${Array.from(this.processingUsers).join(', ')}`);
       }, 10000); // Delay removal to ensure processing is fully complete
+      cleanupTimer.unref();
     }
   }
 
@@ -370,11 +371,9 @@ export class FaucetService {
       return;
     }
 
-    const retryAt = new Date(
-      lastRequestAt + this.IP_COOLDOWN_MS,
-    ).toISOString();
+    const remainingMs = this.IP_COOLDOWN_MS - elapsedMs;
     throw new BadRequestException(
-      `This IP address has already used the faucet. Try again after ${retryAt}.`,
+      `This faucet was already used recently. Please try again in ${this.formatDuration(remainingMs)}.`,
     );
   }
 
@@ -385,5 +384,21 @@ export class FaucetService {
 
     this.ipCooldowns.set(ipAddress, Date.now());
     this.logger.log(`Recorded faucet cooldown for IP ${ipAddress}`);
+  }
+
+  private formatDuration(durationMs: number): string {
+    const totalMinutes = Math.max(1, Math.ceil(durationMs / 60000));
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+
+    if (hours === 0) {
+      return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+    }
+
+    if (minutes === 0) {
+      return `${hours} hour${hours === 1 ? '' : 's'}`;
+    }
+
+    return `${hours} hour${hours === 1 ? '' : 's'} and ${minutes} minute${minutes === 1 ? '' : 's'}`;
   }
 }
