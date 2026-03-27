@@ -65,6 +65,7 @@ export class FaucetService {
   }> {
     const normalizedAddress = faucetRequest.userAddress.toLowerCase();
     const normalizedIp = this.normalizeIp(clientIp);
+    this.cleanupExpiredIpCooldowns();
     this.assertIpCooldown(normalizedIp);
 
     const hasProcessing = this.processingUsers.has(normalizedAddress);
@@ -371,9 +372,8 @@ export class FaucetService {
       return;
     }
 
-    const remainingMs = this.IP_COOLDOWN_MS - elapsedMs;
     throw new BadRequestException(
-      `This faucet was already used recently. Please try again in ${this.formatDuration(remainingMs)}.`,
+      'Faucet should not be abused by using it repeatedly. Please try again later.',
     );
   }
 
@@ -386,19 +386,13 @@ export class FaucetService {
     this.logger.log(`Recorded faucet cooldown for IP ${ipAddress}`);
   }
 
-  private formatDuration(durationMs: number): string {
-    const totalMinutes = Math.max(1, Math.ceil(durationMs / 60000));
-    const hours = Math.floor(totalMinutes / 60);
-    const minutes = totalMinutes % 60;
+  private cleanupExpiredIpCooldowns(): void {
+    const now = Date.now();
 
-    if (hours === 0) {
-      return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+    for (const [ipAddress, lastRequestAt] of this.ipCooldowns.entries()) {
+      if (now - lastRequestAt >= this.IP_COOLDOWN_MS) {
+        this.ipCooldowns.delete(ipAddress);
+      }
     }
-
-    if (minutes === 0) {
-      return `${hours} hour${hours === 1 ? '' : 's'}`;
-    }
-
-    return `${hours} hour${hours === 1 ? '' : 's'} and ${minutes} minute${minutes === 1 ? '' : 's'}`;
   }
 }
