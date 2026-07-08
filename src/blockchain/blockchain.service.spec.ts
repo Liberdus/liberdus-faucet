@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import axios from 'axios';
 import { BlockchainService } from './blockchain.service';
 
 describe('BlockchainService', () => {
@@ -33,5 +34,92 @@ describe('BlockchainService', () => {
     };
     const result = await service.verifyEthereumTx(tx);
     expect(result).toBe(true);
+  });
+
+  describe('node eligibility', () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('accepts a node from the monitor joining list when it is not in archiver standby', async () => {
+      const nodeAddress =
+        '9c267a6ba0efdfd189f945fa95387226ec66b12e67d43ca466a2aaee8ad4b2bb';
+      jest.spyOn(axios, 'get').mockImplementation((url: any) => {
+        const requestUrl = String(url);
+        if (requestUrl.includes('/full-nodelist?standbyOnly=true')) {
+          return Promise.resolve({ data: { nodeList: [] } } as any);
+        }
+
+        if (requestUrl === 'http://monitor.example/api/report') {
+          return Promise.resolve({
+            data: {
+              nodes: {
+                joining: {
+                  [nodeAddress]: {
+                    nodeIpInfo: {
+                      externalIp: '66.187.75.34',
+                      externalPort: 9070,
+                    },
+                  },
+                },
+              },
+            },
+          } as any);
+        }
+
+        return Promise.reject(new Error(`Unexpected URL: ${requestUrl}`));
+      });
+
+      await expect(
+        service.isValidStandbyNode(nodeAddress.toUpperCase(), {
+          networkId: 'testnet',
+          protocols: 'http',
+          host: 'localhost:9001',
+          faucetAddress: 'faucet-address',
+          faucetPrivateKey: 'faucet-private-key',
+          archiverUrl: 'http://archiver.example',
+          monitorUrl: 'http://monitor.example',
+        }),
+      ).resolves.toBe(true);
+    });
+
+    it('rejects a node missing from both archiver standby and monitor joining lists', async () => {
+      jest.spyOn(axios, 'get').mockImplementation((url: any) => {
+        const requestUrl = String(url);
+        if (requestUrl.includes('/full-nodelist?standbyOnly=true')) {
+          return Promise.resolve({ data: { nodeList: [] } } as any);
+        }
+
+        if (requestUrl === 'http://monitor.example/api/report') {
+          return Promise.resolve({
+            data: {
+              nodes: {
+                joining: {
+                  '9c267a6ba0efdfd189f945fa95387226ec66b12e67d43ca466a2aaee8ad4b2bb':
+                    {},
+                },
+              },
+            },
+          } as any);
+        }
+
+        return Promise.reject(new Error(`Unexpected URL: ${requestUrl}`));
+      });
+
+      await expect(
+        service.isValidStandbyNode(
+          'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          {
+            networkId: 'testnet',
+            protocols: 'http',
+            host: 'localhost:9001',
+            faucetAddress: 'faucet-address',
+            faucetPrivateKey: 'faucet-private-key',
+            archiverUrl: 'http://archiver.example',
+            monitorReportUrl: 'http://monitor.example/api/report',
+          },
+        ),
+      ).resolves.toBe(false);
+    });
   });
 });

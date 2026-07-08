@@ -21,6 +21,7 @@ describe('FaucetService IP cooldown', () => {
   beforeEach(() => {
     blockchainService = {
       verifyEthereumTx: jest.fn().mockReturnValue(true),
+      isValidStandbyNode: jest.fn().mockResolvedValue(false),
       getAccount: jest.fn().mockResolvedValue({ data: { balance: { value: '0' } } }),
       transferFunds: jest.fn().mockResolvedValue({ success: true, txHash: 'tx-1' }),
       libToWei: jest.fn((amount: number) => BigInt(amount * 10 ** 18)),
@@ -92,5 +93,71 @@ describe('FaucetService IP cooldown', () => {
     ).resolves.toMatchObject({ success: true });
 
     nowSpy.mockRestore();
+  });
+
+  it('processes a node faucet request when the node is standby or joining eligible', async () => {
+    const nodeAddress =
+      '9c267a6ba0efdfd189f945fa95387226ec66b12e67d43ca466a2aaee8ad4b2bb';
+    const nodeFaucetRequest: FaucetRequestDto = {
+      ...faucetRequest,
+      nodeAddress,
+    };
+
+    blockchainService.isValidStandbyNode.mockResolvedValue(true);
+    blockchainService.getAccount.mockImplementation((address: string) => {
+      if (address === nodeAddress) {
+        return Promise.resolve({
+          stakeLock: { value: '0' },
+          data: { balance: { value: '0' } },
+        });
+      }
+
+      return Promise.resolve({
+        data: { balance: { value: '0' } },
+      });
+    });
+
+    await expect(
+      service.processFaucetRequest(nodeFaucetRequest, '203.0.113.20'),
+    ).resolves.toMatchObject({
+      success: true,
+      txHash: 'tx-1',
+      message: `Successfully sent 10 tokens to ${faucetRequest.userAddress}`,
+    });
+
+    expect(blockchainService.isValidStandbyNode).toHaveBeenCalledWith(
+      nodeAddress,
+      expect.objectContaining({ networkId: 'testnet' }),
+    );
+    expect(blockchainService.transferFunds).toHaveBeenCalledWith(
+      faucetRequest.userAddress,
+      10,
+      expect.objectContaining({ networkId: 'testnet' }),
+      undefined,
+      false,
+    );
+  });
+
+  it('rejects a node faucet request when the node is not standby or joining eligible', async () => {
+    const nodeFaucetRequest: FaucetRequestDto = {
+      ...faucetRequest,
+      userAddress:
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      nodeAddress:
+        'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    };
+
+    blockchainService.isValidStandbyNode.mockResolvedValue(false);
+
+    await expect(
+      service.processFaucetRequest(nodeFaucetRequest, '203.0.113.21'),
+    ).rejects.toMatchObject({
+      response: {
+        message: 'Node address is not a valid standby or joining node',
+      },
+    });
+
+    expect(blockchainService.transferFunds).not.toHaveBeenCalled();
+    expect(statsService.createRequest).not.toHaveBeenCalled();
   });
 });

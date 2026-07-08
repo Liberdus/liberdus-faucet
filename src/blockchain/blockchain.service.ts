@@ -9,6 +9,8 @@ const { Utils } = require('@shardus/types');
 
 dotenv.config();
 
+const DEFAULT_MONITOR_URL = 'https://api.mon-test.liberdus.com';
+
 crypto.init('69fa4195670576c0160d660c3be36556ff8d504725be8a59b5a96509e0c994bc');
 crypto.setCustomStringifier(Utils.safeStringify, 'shardus_safeStringify');
 
@@ -52,6 +54,8 @@ export interface NetworkConfig {
   privateFaucetAddress?: string;
   privateFaucetPrivateKey?: string;
   archiverUrl: string;
+  monitorReportUrl?: string;
+  monitorUrl?: string;
 }
 
 @Injectable()
@@ -130,13 +134,9 @@ export class BlockchainService {
       );
       const { nodeList } = response.data;
 
-      if (
-        nodeList == null ||
-        !Array.isArray(nodeList) ||
-        nodeList.length === 0
-      ) {
+      if (nodeList == null || !Array.isArray(nodeList)) {
         this.logger.error('Error fetching standby nodes:');
-        throw new Error('No standby nodes found or invalid response format');
+        throw new Error('Invalid standby node response format');
       }
 
       return nodeList.map((node: any) => ({
@@ -195,15 +195,63 @@ export class BlockchainService {
   }
 
   async isValidStandbyNode(address: string, networkConfig: NetworkConfig): Promise<boolean> {
+    const normalizedAddress = address.toLowerCase();
+
     try {
       const standbyNodes = await this.getStandbyNodelist(networkConfig);
-      return standbyNodes.some(
-        (node) => node.publicKey.toLowerCase() === address.toLowerCase(),
+      const isStandbyNode = standbyNodes.some(
+        (node) => node.publicKey.toLowerCase() === normalizedAddress,
       );
+
+      if (isStandbyNode) {
+        return true;
+      }
     } catch (error: any) {
       this.logger.error('Error validating standby node:', error);
-      return false; // If there's an error fetching nodes, assume it's not valid
     }
+
+    return this.isValidJoiningNode(address, networkConfig);
+  }
+
+  async isValidJoiningNode(address: string, networkConfig: NetworkConfig): Promise<boolean> {
+    const monitorReportUrl = this.getMonitorReportUrl(networkConfig);
+    if (!monitorReportUrl) {
+      return false;
+    }
+
+    try {
+      const response = await axios.get(monitorReportUrl);
+      const joiningNodes = response.data?.nodes?.joining;
+      if (joiningNodes == null || typeof joiningNodes !== 'object') {
+        this.logger.warn('Monitor report does not include nodes.joining');
+        return false;
+      }
+
+      const normalizedAddress = address.toLowerCase();
+      return Object.keys(joiningNodes).some(
+        (nodeId) => nodeId.toLowerCase() === normalizedAddress,
+      );
+    } catch (error: any) {
+      this.logger.error('Error validating joining node:', error);
+      return false;
+    }
+  }
+
+  private getMonitorReportUrl(networkConfig: NetworkConfig): string | undefined {
+    if (networkConfig.monitorReportUrl) {
+      return networkConfig.monitorReportUrl;
+    }
+
+    if (process.env.MONITOR_REPORT_URL) {
+      return process.env.MONITOR_REPORT_URL;
+    }
+
+    const monitorUrl = networkConfig.monitorUrl || process.env.MONITOR_URL;
+    if (monitorUrl) {
+      return `${monitorUrl.replace(/\/$/, '')}/api/report`;
+    }
+
+    return `${DEFAULT_MONITOR_URL}/api/report`;
   }
 
   async getAccount(address: string, networkConfig: NetworkConfig): Promise<any> {
