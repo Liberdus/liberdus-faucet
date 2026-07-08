@@ -240,11 +240,11 @@ export class FaucetService {
     );
     if (!isStandbyNode) {
       this.logger.warn(
-        `Node address ${request.nodeAddress} is not a valid standby node`,
+        `Node address ${request.nodeAddress} is not a valid standby or joining node`,
       );
       return {
         success: false,
-        reason: 'Node address is not a valid standby node',
+        reason: 'Node address is not a valid standby or joining node',
       };
     }
     
