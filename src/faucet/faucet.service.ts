@@ -1,5 +1,13 @@
-import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
-import { BlockchainService, NetworkConfig } from '../blockchain/blockchain.service';
+import {
+  Injectable,
+  Logger,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
+import {
+  BlockchainService,
+  NetworkConfig,
+} from '../blockchain/blockchain.service';
 import { StatsService } from '../stats/stats.service';
 import { FaucetRequestDto } from '../common/dto/faucet-request.dto';
 import * as fs from 'fs';
@@ -33,17 +41,22 @@ export class FaucetService {
     const networksPath = path.join(process.cwd(), 'networks.json');
     const networksData = fs.readFileSync(networksPath, 'utf-8');
     const networksJson = JSON.parse(networksData);
-    
+
     // Transform the networks.json structure to include networkId
-    this.networks = Object.entries(networksJson).reduce((acc, [networkId, config]: [string, any]) => {
-      acc[networkId] = {
-        networkId,
-        ...config,
-      };
-      return acc;
-    }, {} as Record<string, NetworkConfig>);
-    
-    this.logger.log(`Loaded ${Object.keys(this.networks).length} network configurations`);
+    this.networks = Object.entries(networksJson).reduce(
+      (acc, [networkId, config]: [string, any]) => {
+        acc[networkId] = {
+          networkId,
+          ...config,
+        };
+        return acc;
+      },
+      {} as Record<string, NetworkConfig>,
+    );
+
+    this.logger.log(
+      `Loaded ${Object.keys(this.networks).length} network configurations`,
+    );
   }
 
   private getNetworkConfig(networkId: string): NetworkConfig {
@@ -65,13 +78,18 @@ export class FaucetService {
   }> {
     const normalizedAddress = faucetRequest.userAddress.toLowerCase();
     const normalizedIp = this.normalizeIp(clientIp);
+    const isNodeFaucet = !!faucetRequest.nodeAddress;
+    const faucetType = isNodeFaucet ? 'node' : 'user';
+    const ipCooldownKey = this.getIpCooldownKey(normalizedIp, faucetType);
     this.cleanupExpiredIpCooldowns();
-    this.assertIpCooldown(normalizedIp);
+    this.assertIpCooldown(ipCooldownKey);
 
     const hasProcessing = this.processingUsers.has(normalizedAddress);
-    
+
     this.logger.log(`hasProcessing for ${normalizedAddress}: ${hasProcessing}`);
-    this.logger.log(`Current processing users before check: ${Array.from(this.processingUsers).join(', ')}`);
+    this.logger.log(
+      `Current processing users before check: ${Array.from(this.processingUsers).join(', ')}`,
+    );
 
     if (this.processingUsers.has(normalizedAddress)) {
       this.logger.warn(
@@ -82,106 +100,121 @@ export class FaucetService {
       );
     }
     this.processingUsers.add(normalizedAddress);
-    this.logger.log(`User address ${normalizedAddress} added to processing set`);
-    this.logger.log(`Current processing users: ${Array.from(this.processingUsers).join(', ')}`);
-
-    try {
-      // Determine faucet type: node faucet if nodeAddress is provided, otherwise user faucet
-      const isNodeFaucet = !!faucetRequest.nodeAddress;
-    const faucetType = isNodeFaucet ? 'node' : 'user';
-    const faucetAmount = isNodeFaucet ? this.FAUCET_AMOUNT : this.USER_FAUCET_AMOUNT;
-
     this.logger.log(
-      `Processing ${faucetType} faucet request for user: ${faucetRequest.username} on network: ${faucetRequest.networkId}`,
+      `User address ${normalizedAddress} added to processing set`,
     );
-
-    // Validate network ID and get configuration
-    const networkConfig = this.getNetworkConfig(faucetRequest.networkId);
-
-    // Validate the request (basic validation - could be enhanced with signature verification)
-    const validateResult = await this.validateRequest(faucetRequest, networkConfig, isNodeFaucet);
-    if (validateResult.success === false) {
-      throw new BadRequestException(validateResult.reason || 'Invalid request');
-    }
-
-    // Create stats entry
-    const request = this.statsService.createRequest(
-      faucetRequest.nodeAddress,
-      faucetRequest.username,
-      faucetRequest.userAddress,
-      faucetAmount,
+    this.logger.log(
+      `Current processing users: ${Array.from(this.processingUsers).join(', ')}`,
     );
 
     try {
-      // Check if user account is private
-      let isPrivate = false;
-      try {
-        const account = await this.blockchainService.getAccount(
-          faucetRequest.userAddress,
-          networkConfig,
-        );
-        if (account && account.private) {
-          isPrivate = true;
-          this.logger.log(
-            `User ${faucetRequest.username} has a private account. Using private faucet.`,
-          );
-        }
-      } catch (error) {
-        this.logger.warn(
-          `Failed to fetch account info for ${faucetRequest.userAddress}. Defaulting to public faucet. Error: ${error.message}`,
+      const faucetAmount = isNodeFaucet
+        ? this.FAUCET_AMOUNT
+        : this.USER_FAUCET_AMOUNT;
+
+      this.logger.log(
+        `Processing ${faucetType} faucet request for user: ${faucetRequest.username} on network: ${faucetRequest.networkId}`,
+      );
+
+      // Validate network ID and get configuration
+      const networkConfig = this.getNetworkConfig(faucetRequest.networkId);
+
+      // Validate the request (basic validation - could be enhanced with signature verification)
+      const validateResult = await this.validateRequest(
+        faucetRequest,
+        networkConfig,
+        isNodeFaucet,
+      );
+      if (validateResult.success === false) {
+        throw new BadRequestException(
+          validateResult.reason || 'Invalid request',
         );
       }
 
-      // Process the blockchain transaction
-      const result = await this.blockchainService.transferFunds(
+      // Create stats entry
+      const request = this.statsService.createRequest(
+        faucetRequest.nodeAddress,
+        faucetRequest.username,
         faucetRequest.userAddress,
         faucetAmount,
-        networkConfig,
-        undefined,
-        isPrivate,
       );
 
-      // Update stats with success
-      this.statsService.updateRequestStatus(
-        request.id,
-        'completed',
-        result.txHash || result.hash,
-      );
-      this.recordIpUsage(normalizedIp);
+      try {
+        // Check if user account is private
+        let isPrivate = false;
+        try {
+          const account = await this.blockchainService.getAccount(
+            faucetRequest.userAddress,
+            networkConfig,
+          );
+          if (account && account.private) {
+            isPrivate = true;
+            this.logger.log(
+              `User ${faucetRequest.username} has a private account. Using private faucet.`,
+            );
+          }
+        } catch (error) {
+          this.logger.warn(
+            `Failed to fetch account info for ${faucetRequest.userAddress}. Defaulting to public faucet. Error: ${error.message}`,
+          );
+        }
 
-      this.logger.log(`Faucet request completed for ${faucetRequest.username}`);
+        // Process the blockchain transaction
+        const result = await this.blockchainService.transferFunds(
+          faucetRequest.userAddress,
+          faucetAmount,
+          networkConfig,
+          undefined,
+          isPrivate,
+        );
 
-      return {
-        success: true,
-        requestId: request.id,
-        txHash: result.txHash || result.hash,
-        message: `Successfully sent ${faucetAmount} tokens to ${faucetRequest.userAddress}`,
-      };
-    } catch (error) {
-      this.logger.error(
-        `Faucet request failed for ${faucetRequest.username}:`,
-        error,
-      );
+        // Update stats with success
+        this.statsService.updateRequestStatus(
+          request.id,
+          'completed',
+          result.txHash || result.hash,
+        );
+        this.recordIpUsage(ipCooldownKey);
 
-      // Update stats with failure
-      this.statsService.updateRequestStatus(
-        request.id,
-        'failed',
-        undefined,
-        error.message,
-      );
+        this.logger.log(
+          `Faucet request completed for ${faucetRequest.username}`,
+        );
 
-      return {
-        success: false,
-        requestId: request.id,
-        message: `Failed to process faucet request: ${error.message}`,
-      };
-    }
+        return {
+          success: true,
+          requestId: request.id,
+          txHash: result.txHash || result.hash,
+          message: `Successfully sent ${faucetAmount} tokens to ${faucetRequest.userAddress}`,
+        };
+      } catch (error) {
+        this.logger.error(
+          `Faucet request failed for ${faucetRequest.username}:`,
+          error,
+        );
+
+        // Update stats with failure
+        this.statsService.updateRequestStatus(
+          request.id,
+          'failed',
+          undefined,
+          error.message,
+        );
+
+        return {
+          success: false,
+          requestId: request.id,
+          message: `Failed to process faucet request: ${error.message}`,
+        };
+      }
     } finally {
       const cleanupTimer = setTimeout(() => {
         this.processingUsers.delete(normalizedAddress);
-        this.logger.log(`User address ${normalizedAddress} removed from processing set after timeout`);
-        this.logger.log(`Current processing users: ${Array.from(this.processingUsers).join(', ')}`);
+        this.logger.log(
+          `User address ${normalizedAddress} removed from processing set after timeout`,
+        );
+        this.logger.log(
+          `Current processing users: ${Array.from(this.processingUsers).join(', ')}`,
+        );
       }, 10000); // Delay removal to ensure processing is fully complete
       cleanupTimer.unref();
     }
@@ -231,7 +264,10 @@ export class FaucetService {
     networkConfig: NetworkConfig,
   ): Promise<{ success: boolean; reason?: string }> {
     if (!request.nodeAddress) {
-      return { success: false, reason: 'Node address is required for node faucet' };
+      return {
+        success: false,
+        reason: 'Node address is required for node faucet',
+      };
     }
 
     const isStandbyNode = await this.blockchainService.isValidStandbyNode(
@@ -247,7 +283,7 @@ export class FaucetService {
         reason: 'Node address is not a valid standby or joining node',
       };
     }
-    
+
     const nodeAccount = await this.blockchainService.getAccount(
       request.nodeAddress,
       networkConfig,
@@ -264,7 +300,7 @@ export class FaucetService {
         return { success: false, reason: 'Node already has sufficient stake' };
       }
     }
-    
+
     const nomineeAccount = await this.blockchainService.getAccount(
       request.userAddress,
       networkConfig,
@@ -315,7 +351,9 @@ export class FaucetService {
 
     // Check user balance
     const balance = BigInt('0x' + userAccount.data.balance.value);
-    const maxBalanceInWei = this.blockchainService.libToWei(this.USER_MAX_BALANCE);
+    const maxBalanceInWei = this.blockchainService.libToWei(
+      this.USER_MAX_BALANCE,
+    );
 
     if (balance >= maxBalanceInWei) {
       this.logger.warn(
@@ -356,19 +394,27 @@ export class FaucetService {
     return ipAddress;
   }
 
-  private assertIpCooldown(ipAddress: string): void {
+  private getIpCooldownKey(ipAddress: string, faucetType: string): string {
     if (ipAddress === 'unknown') {
+      return 'unknown';
+    }
+
+    return `${ipAddress}:${faucetType}`;
+  }
+
+  private assertIpCooldown(ipCooldownKey: string): void {
+    if (ipCooldownKey === 'unknown') {
       return;
     }
 
-    const lastRequestAt = this.ipCooldowns.get(ipAddress);
+    const lastRequestAt = this.ipCooldowns.get(ipCooldownKey);
     if (!lastRequestAt) {
       return;
     }
 
     const elapsedMs = Date.now() - lastRequestAt;
     if (elapsedMs >= this.IP_COOLDOWN_MS) {
-      this.ipCooldowns.delete(ipAddress);
+      this.ipCooldowns.delete(ipCooldownKey);
       return;
     }
 
@@ -377,13 +423,13 @@ export class FaucetService {
     );
   }
 
-  private recordIpUsage(ipAddress: string): void {
-    if (ipAddress === 'unknown') {
+  private recordIpUsage(ipCooldownKey: string): void {
+    if (ipCooldownKey === 'unknown') {
       return;
     }
 
-    this.ipCooldowns.set(ipAddress, Date.now());
-    this.logger.log(`Recorded faucet cooldown for IP ${ipAddress}`);
+    this.ipCooldowns.set(ipCooldownKey, Date.now());
+    this.logger.log(`Recorded faucet cooldown for ${ipCooldownKey}`);
   }
 
   private cleanupExpiredIpCooldowns(): void {
