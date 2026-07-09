@@ -113,7 +113,7 @@ export class FaucetService {
         : this.USER_FAUCET_AMOUNT;
 
       this.logger.log(
-        `Processing ${faucetType} faucet request for user: ${faucetRequest.username} on network: ${faucetRequest.networkId}`,
+        `Processing ${faucetType} faucet request for user: ${faucetRequest.username} on network: ${faucetRequest.networkId}; nodeAddress: ${faucetRequest.nodeAddress ?? 'not provided (user faucet request)'}`,
       );
 
       // Validate network ID and get configuration
