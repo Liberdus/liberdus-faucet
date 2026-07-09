@@ -180,13 +180,15 @@ export class BlockchainService {
       const isValid =
         recoveredShardusAddress.toLowerCase() === owner.toLowerCase();
 
-      console.log('Signed Obj', obj);
-      console.log('Signature verification result:');
-      console.log('Is Valid:', isValid);
-      console.log('message', message);
-      console.log('Owner Address:', obj.sign.owner);
-      console.log('Recovered Address:', recoveredAddress);
-      console.log('Recovered Shardus Address:', recoveredShardusAddress);
+      const requestType = obj.nodeAddress
+        ? 'node faucet request'
+        : 'user faucet request';
+      this.logger.log(
+        `Signed request context: type=${requestType}, username=${obj.username ?? 'unknown'}, userAddress=${obj.userAddress ?? 'unknown'}, nodeAddress=${obj.nodeAddress ?? 'not provided (user faucet request)'}, networkId=${obj.networkId ?? 'unknown'}`,
+      );
+      this.logger.log(
+        `Signature verification result: isValid=${isValid}, message=${message}, ownerAddress=${obj.sign.owner}, recoveredAddress=${recoveredAddress}, recoveredShardusAddress=${recoveredShardusAddress}`,
+      );
       return isValid;
     } catch (error) {
       this.logger.error('Error verifying Ethereum transaction:', error);
