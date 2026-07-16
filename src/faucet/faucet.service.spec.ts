@@ -2,6 +2,55 @@ import { BadRequestException } from '@nestjs/common';
 import { FaucetService } from './faucet.service';
 import { FaucetRequestDto } from '../common/dto/faucet-request.dto';
 
+describe('FaucetService network configuration', () => {
+  let readFileSyncMock: jest.SpyInstance;
+
+  beforeEach(() => {
+    readFileSyncMock = jest.spyOn(require('fs'), 'readFileSync');
+  });
+
+  afterEach(() => {
+    readFileSyncMock.mockRestore();
+  });
+
+  it.each(['archiverUrl', 'monitorUrl'])(
+    'rejects a network missing required %s',
+    (missingField) => {
+      const networkConfig: Record<string, string> = {
+        protocols: 'http',
+        host: 'localhost:9001',
+        faucetAddress: 'faucet-address',
+        faucetPrivateKey: 'faucet-private-key',
+        archiverUrl: 'http://archiver.example',
+        monitorUrl: 'http://monitor.example',
+      };
+      delete networkConfig[missingField];
+      readFileSyncMock.mockReturnValue(
+        JSON.stringify({ testnet: networkConfig }),
+      );
+
+      expect(
+        () => new FaucetService({} as any, {} as any),
+      ).toThrow(
+        `Network 'testnet' is missing required configuration: ${missingField}`,
+      );
+    },
+  );
+
+  it('loads a network containing both required endpoint URLs', () => {
+    readFileSyncMock.mockReturnValue(
+      JSON.stringify({
+        testnet: {
+          archiverUrl: 'http://archiver.example',
+          monitorUrl: 'http://monitor.example',
+        },
+      }),
+    );
+
+    expect(() => new FaucetService({} as any, {} as any)).not.toThrow();
+  });
+});
+
 describe('FaucetService IP cooldown', () => {
   let service: FaucetService;
   let blockchainService: any;
@@ -57,6 +106,7 @@ describe('FaucetService IP cooldown', () => {
           faucetAddress: 'faucet-address',
           faucetPrivateKey: 'faucet-private-key',
           archiverUrl: 'http://localhost:4000',
+          monitorUrl: 'http://localhost:3000',
         },
       },
     });

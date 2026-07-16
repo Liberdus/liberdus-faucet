@@ -1,0 +1,10 @@
+{
+  "testnet": {
+    "protocols": "https",
+    "host": "api.testnet.example.com",
+    "faucetAddress": "replace-with-faucet-address",
+    "faucetPrivateKey": "replace-with-faucet-private-key",
+    "archiverUrl": "https://archiver.testnet.example.com",
+    "monitorUrl": "https://monitor.testnet.example.com"
+  }
+}

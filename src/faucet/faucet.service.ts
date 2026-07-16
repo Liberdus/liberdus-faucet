@@ -45,9 +45,21 @@ export class FaucetService {
     // Transform the networks.json structure to include networkId
     this.networks = Object.entries(networksJson).reduce(
       (acc, [networkId, config]: [string, any]) => {
+        if (config == null || typeof config !== 'object' || Array.isArray(config)) {
+          throw new Error(`Invalid configuration for network '${networkId}'`);
+        }
+
+        for (const field of ['archiverUrl', 'monitorUrl'] as const) {
+          if (typeof config[field] !== 'string' || config[field].trim() === '') {
+            throw new Error(
+              `Network '${networkId}' is missing required configuration: ${field}`,
+            );
+          }
+        }
+
         acc[networkId] = {
-          networkId,
           ...config,
+          networkId,
         };
         return acc;
       },
