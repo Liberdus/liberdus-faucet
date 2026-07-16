@@ -116,7 +116,7 @@ describe('BlockchainService', () => {
             faucetAddress: 'faucet-address',
             faucetPrivateKey: 'faucet-private-key',
             archiverUrl: 'http://archiver.example',
-            monitorReportUrl: 'http://monitor.example/api/report',
+            monitorUrl: 'http://monitor.example/',
           },
         ),
       ).resolves.toBe(false);

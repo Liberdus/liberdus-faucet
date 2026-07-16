@@ -68,7 +68,13 @@ cp .env.example .env
 # Edit .env with your configuration
 ```
 
-3. **Start the server:**
+3. **Configure networks:**
+```bash
+cp networks.example.json networks.json
+# Edit networks.json with the endpoints and faucet credentials for each network
+```
+
+4. **Start the server:**
 ```bash
 npm run start:dev
 ```
@@ -100,6 +106,29 @@ PORT=3000
 # Example: ALLOWED_ORIGINS=https://app.liberdus.com,https://faucet.liberdus.com
 # ALLOWED_ORIGINS=
 ```
+
+## Network Configuration
+
+`networks.json` is keyed by network ID. Every network must define both
+`archiverUrl` and `monitorUrl`; the application fails to start if either value is
+missing or empty. The faucet appends `/api/report` to `monitorUrl` when it checks
+joining-node eligibility.
+
+```json
+{
+  "testnet": {
+    "protocols": "https",
+    "host": "api.testnet.example.com",
+    "archiverUrl": "https://archiver.testnet.example.com",
+    "monitorUrl": "https://monitor.testnet.example.com",
+    "faucetAddress": "replace-with-faucet-address",
+    "faucetPrivateKey": "replace-with-faucet-private-key"
+  }
+}
+```
+
+Monitor configuration is deliberately network-specific. Global `MONITOR_URL`
+and `MONITOR_REPORT_URL` environment variables are not used.
 
 ## Testing
 
