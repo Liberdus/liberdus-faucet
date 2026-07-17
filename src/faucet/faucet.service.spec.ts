@@ -102,6 +102,20 @@ describe('FaucetService network configuration', () => {
     expect(() => new FaucetService({} as any, {} as any)).not.toThrow();
   });
 
+  it('loads complete private faucet credentials', () => {
+    readFileSyncMock.mockReturnValue(
+      JSON.stringify({
+        testnet: {
+          ...validNetworkConfig(),
+          privateFaucetAddress: 'private-address',
+          privateFaucetPrivateKey: 'private-key',
+        },
+      }),
+    );
+
+    expect(() => new FaucetService({} as any, {} as any)).not.toThrow();
+  });
+
   it('loads the network configuration from NETWORKS_CONFIG_PATH', () => {
     const previousConfigPath = process.env.NETWORKS_CONFIG_PATH;
     process.env.NETWORKS_CONFIG_PATH = 'networks.example.json';
