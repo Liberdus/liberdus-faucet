@@ -37,24 +37,56 @@ export class FaucetService {
     private readonly blockchainService: BlockchainService,
     private readonly statsService: StatsService,
   ) {
-    // Load networks.json
-    const networksPath = path.join(process.cwd(), 'networks.json');
+    // Allow test and deployment environments to provide a different config file.
+    const networksPath = path.resolve(
+      process.cwd(),
+      process.env.NETWORKS_CONFIG_PATH || 'networks.json',
+    );
     const networksData = fs.readFileSync(networksPath, 'utf-8');
     const networksJson = JSON.parse(networksData);
 
     // Transform the networks.json structure to include networkId
     this.networks = Object.entries(networksJson).reduce(
       (acc, [networkId, config]: [string, any]) => {
-        if (config == null || typeof config !== 'object' || Array.isArray(config)) {
+        if (
+          config == null ||
+          typeof config !== 'object' ||
+          Array.isArray(config)
+        ) {
           throw new Error(`Invalid configuration for network '${networkId}'`);
         }
 
-        for (const field of ['archiverUrl', 'monitorUrl'] as const) {
-          if (typeof config[field] !== 'string' || config[field].trim() === '') {
+        for (const field of [
+          'protocols',
+          'host',
+          'faucetAddress',
+          'faucetPrivateKey',
+          'archiverUrl',
+          'monitorUrl',
+        ] as const) {
+          if (
+            typeof config[field] !== 'string' ||
+            config[field].trim() === ''
+          ) {
             throw new Error(
               `Network '${networkId}' is missing required configuration: ${field}`,
             );
           }
+        }
+
+        const hasPrivateFaucetConfig =
+          config.privateFaucetAddress !== undefined ||
+          config.privateFaucetPrivateKey !== undefined;
+        if (
+          hasPrivateFaucetConfig &&
+          (typeof config.privateFaucetAddress !== 'string' ||
+            config.privateFaucetAddress.trim() === '' ||
+            typeof config.privateFaucetPrivateKey !== 'string' ||
+            config.privateFaucetPrivateKey.trim() === '')
+        ) {
+          throw new Error(
+            `Network '${networkId}' must configure privateFaucetAddress and privateFaucetPrivateKey together`,
+          );
         }
 
         acc[networkId] = {
@@ -282,11 +314,11 @@ export class FaucetService {
       };
     }
 
-    const isStandbyNode = await this.blockchainService.isValidStandbyNode(
+    const isEligibleNode = await this.blockchainService.isEligibleNode(
       request.nodeAddress,
       networkConfig,
     );
-    if (!isStandbyNode) {
+    if (!isEligibleNode) {
       this.logger.warn(
         `Node address ${request.nodeAddress} is not a valid standby or joining node`,
       );
@@ -338,7 +370,7 @@ export class FaucetService {
     }
 
     this.logger.log(
-      `Validating node faucet request for user: ${request.username}, Standby Node: ${isStandbyNode}, Nominee Account: ${JSON.stringify(nomineeAccount)}`,
+      `Validating node faucet request for user: ${request.username}, Eligible Node: ${isEligibleNode}, Nominee Account: ${JSON.stringify(nomineeAccount)}`,
     );
 
     return { success: true };
@@ -406,7 +438,10 @@ export class FaucetService {
     return ipAddress;
   }
 
-  private getIpCooldownKey(ipAddress: string, faucetType: string): string {
+  private getIpCooldownKey(
+    ipAddress: string,
+    faucetType: 'node' | 'user',
+  ): string {
     if (ipAddress === 'unknown') {
       return 'unknown';
     }

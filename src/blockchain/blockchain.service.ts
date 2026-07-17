@@ -55,9 +55,21 @@ export interface NetworkConfig {
   monitorUrl: string;
 }
 
+interface MonitorReportCacheEntry {
+  joiningNodeIds: Set<string>;
+  expiresAt: number;
+}
+
+const MONITOR_REQUEST_TIMEOUT_MS = 5_000;
+const MONITOR_REPORT_CACHE_TTL_MS = 5_000;
+
 @Injectable()
 export class BlockchainService {
   private readonly logger = new Logger(BlockchainService.name);
+  private readonly monitorReportCache = new Map<
+    string,
+    MonitorReportCacheEntry
+  >();
 
   constructor() {
     // Crypto is already initialized globally
@@ -74,7 +86,10 @@ export class BlockchainService {
     usePrivateFaucet: boolean = false,
   ): Promise<any> {
     try {
-      const resolvedAddress = await this.getAddress(targetAddress, networkConfig);
+      const resolvedAddress = await this.getAddress(
+        targetAddress,
+        networkConfig,
+      );
       const amountInWei = this.libToWei(amount);
 
       this.logger.log(`Sending ${amountInWei} to ${resolvedAddress}`);
@@ -124,27 +139,23 @@ export class BlockchainService {
     }
   }
 
-  async getStandbyNodelist(networkConfig: NetworkConfig): Promise<StandbyNode[]> {
-    try {
-      const response = await axios.get(
-        `${networkConfig.archiverUrl}/full-nodelist?standbyOnly=true`,
-      );
-      const { nodeList } = response.data;
+  async getStandbyNodelist(
+    networkConfig: NetworkConfig,
+  ): Promise<StandbyNode[]> {
+    const response = await axios.get(
+      `${networkConfig.archiverUrl}/full-nodelist?standbyOnly=true`,
+    );
+    const { nodeList } = response.data;
 
-      if (nodeList == null || !Array.isArray(nodeList)) {
-        this.logger.error('Error fetching standby nodes:');
-        throw new Error('Invalid standby node response format');
-      }
-
-      return nodeList.map((node: any) => ({
-        ip: node.ip,
-        port: node.port,
-        publicKey: node.publicKey,
-      }));
-    } catch (error) {
-      this.logger.error('Error fetching standby nodes:', error);
-      throw error;
+    if (nodeList == null || !Array.isArray(nodeList)) {
+      throw new Error('Invalid standby node response format');
     }
+
+    return nodeList.map((node: any) => ({
+      ip: node.ip,
+      port: node.port,
+      publicKey: node.publicKey,
+    }));
   }
 
   verifyEthereumTx(obj: any) {
@@ -177,12 +188,6 @@ export class BlockchainService {
       const isValid =
         recoveredShardusAddress.toLowerCase() === owner.toLowerCase();
 
-      const requestType = obj.nodeAddress
-        ? 'node faucet request'
-        : 'user faucet request';
-      this.logger.log(
-        `Signed request context: type=${requestType}, username=${obj.username ?? 'unknown'}, userAddress=${obj.userAddress ?? 'unknown'}, nodeAddress=${obj.nodeAddress ?? 'not provided (user faucet request)'}, networkId=${obj.networkId ?? 'unknown'}`,
-      );
       this.logger.log(
         `Signature verification result: isValid=${isValid}, message=${message}, ownerAddress=${obj.sign.owner}, recoveredAddress=${recoveredAddress}, recoveredShardusAddress=${recoveredShardusAddress}`,
       );
@@ -193,53 +198,84 @@ export class BlockchainService {
     }
   }
 
-  async isValidStandbyNode(address: string, networkConfig: NetworkConfig): Promise<boolean> {
-    const normalizedAddress = address.toLowerCase();
-
+  async isEligibleNode(
+    address: string,
+    networkConfig: NetworkConfig,
+  ): Promise<boolean> {
     try {
-      const standbyNodes = await this.getStandbyNodelist(networkConfig);
-      const isStandbyNode = standbyNodes.some(
-        (node) => node.publicKey.toLowerCase() === normalizedAddress,
-      );
-
-      if (isStandbyNode) {
+      if (await this.isValidStandbyNode(address, networkConfig)) {
         return true;
       }
     } catch (error: any) {
-      this.logger.error('Error validating standby node:', error);
+      this.logger.warn(
+        'Standby node validation failed; checking monitor joining state',
+        error,
+      );
     }
 
     return this.isValidJoiningNode(address, networkConfig);
   }
 
-  async isValidJoiningNode(address: string, networkConfig: NetworkConfig): Promise<boolean> {
+  async isValidStandbyNode(
+    address: string,
+    networkConfig: NetworkConfig,
+  ): Promise<boolean> {
+    const normalizedAddress = address.toLowerCase();
+    const standbyNodes = await this.getStandbyNodelist(networkConfig);
+    return standbyNodes.some(
+      (node) => node.publicKey.toLowerCase() === normalizedAddress,
+    );
+  }
+
+  async isValidJoiningNode(
+    address: string,
+    networkConfig: NetworkConfig,
+  ): Promise<boolean> {
     const monitorReportUrl = this.getMonitorReportUrl(networkConfig);
 
     try {
-      const response = await axios.get(monitorReportUrl);
+      const cachedReport = this.monitorReportCache.get(monitorReportUrl);
+      if (cachedReport && cachedReport.expiresAt > Date.now()) {
+        return cachedReport.joiningNodeIds.has(address.toLowerCase());
+      }
+
+      this.monitorReportCache.delete(monitorReportUrl);
+      const response = await axios.get(monitorReportUrl, {
+        timeout: MONITOR_REQUEST_TIMEOUT_MS,
+      });
       const joiningNodes = response.data?.nodes?.joining;
-      if (joiningNodes == null || typeof joiningNodes !== 'object') {
+      if (
+        joiningNodes == null ||
+        typeof joiningNodes !== 'object' ||
+        Array.isArray(joiningNodes)
+      ) {
         this.logger.warn('Monitor report does not include nodes.joining');
         return false;
       }
 
-      const normalizedAddress = address.toLowerCase();
-      return Object.keys(joiningNodes).some(
-        (nodeId) => nodeId.toLowerCase() === normalizedAddress,
+      const joiningNodeIds = new Set(
+        Object.keys(joiningNodes).map((nodeId) => nodeId.toLowerCase()),
       );
+      this.monitorReportCache.set(monitorReportUrl, {
+        joiningNodeIds,
+        expiresAt: Date.now() + MONITOR_REPORT_CACHE_TTL_MS,
+      });
+
+      return joiningNodeIds.has(address.toLowerCase());
     } catch (error: any) {
       this.logger.error('Error validating joining node:', error);
       return false;
     }
   }
 
-  private getMonitorReportUrl(
-    networkConfig: NetworkConfig,
-  ): string {
+  private getMonitorReportUrl(networkConfig: NetworkConfig): string {
     return `${networkConfig.monitorUrl.replace(/\/+$/, '')}/api/report`;
   }
 
-  async getAccount(address: string, networkConfig: NetworkConfig): Promise<any> {
+  async getAccount(
+    address: string,
+    networkConfig: NetworkConfig,
+  ): Promise<any> {
     try {
       const response = await axios.get(
         `${networkConfig.protocols}://${networkConfig.host}/account/${address}`,
@@ -257,7 +293,10 @@ export class BlockchainService {
     }
   }
 
-  async getAddress(handle: string, networkConfig: NetworkConfig): Promise<string> {
+  async getAddress(
+    handle: string,
+    networkConfig: NetworkConfig,
+  ): Promise<string> {
     // If it's already a 64-character address, return as is
     if (handle.length === 64) {
       return handle;
@@ -330,7 +369,10 @@ export class BlockchainService {
     return ethAddress.slice(2).toLowerCase() + '0'.repeat(24);
   }
 
-  private async injectTx(tx: TransactionData, networkConfig: NetworkConfig): Promise<TransactionResponse> {
+  private async injectTx(
+    tx: TransactionData,
+    networkConfig: NetworkConfig,
+  ): Promise<TransactionResponse> {
     const data = Utils.safeStringify(tx);
     this.logger.log('Tx data:', data);
 

@@ -37,50 +37,75 @@ describe('BlockchainService', () => {
   });
 
   describe('node eligibility', () => {
+    const joiningNodeAddress =
+      '9c267a6ba0efdfd189f945fa95387226ec66b12e67d43ca466a2aaee8ad4b2bb';
+    const missingNodeAddress =
+      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const networkConfig = {
+      networkId: 'testnet',
+      protocols: 'http',
+      host: 'localhost:9001',
+      faucetAddress: 'faucet-address',
+      faucetPrivateKey: 'faucet-private-key',
+      archiverUrl: 'http://archiver.example',
+      monitorUrl: 'http://monitor.example',
+    };
+    const monitorReport = (nodeAddresses: string[]) => ({
+      data: {
+        nodes: {
+          joining: Object.fromEntries(
+            nodeAddresses.map((nodeAddress) => [nodeAddress, {}]),
+          ),
+        },
+      },
+    });
+
+    beforeEach(() => {
+      service = new BlockchainService();
+    });
+
     afterEach(() => {
       jest.restoreAllMocks();
     });
 
-    it('accepts a node from the monitor joining list when it is not in archiver standby', async () => {
-      const nodeAddress =
-        '9c267a6ba0efdfd189f945fa95387226ec66b12e67d43ca466a2aaee8ad4b2bb';
-      jest.spyOn(axios, 'get').mockImplementation((url: any) => {
-        const requestUrl = String(url);
-        if (requestUrl.includes('/full-nodelist?standbyOnly=true')) {
-          return Promise.resolve({ data: { nodeList: [] } } as any);
-        }
-
-        if (requestUrl === 'http://monitor.example/api/report') {
-          return Promise.resolve({
-            data: {
-              nodes: {
-                joining: {
-                  [nodeAddress]: {
-                    nodeIpInfo: {
-                      externalIp: '66.187.75.34',
-                      externalPort: 9070,
-                    },
-                  },
-                },
-              },
-            },
-          } as any);
-        }
-
-        return Promise.reject(new Error(`Unexpected URL: ${requestUrl}`));
+    it('accepts a standby node without querying the monitor', async () => {
+      const axiosGetSpy = jest.spyOn(axios, 'get').mockResolvedValue({
+        data: {
+          nodeList: [
+            { ip: '127.0.0.1', port: 9001, publicKey: joiningNodeAddress },
+          ],
+        },
       });
 
       await expect(
-        service.isValidStandbyNode(nodeAddress.toUpperCase(), {
-          networkId: 'testnet',
-          protocols: 'http',
-          host: 'localhost:9001',
-          faucetAddress: 'faucet-address',
-          faucetPrivateKey: 'faucet-private-key',
-          archiverUrl: 'http://archiver.example',
-          monitorUrl: 'http://monitor.example',
-        }),
+        service.isEligibleNode(joiningNodeAddress.toUpperCase(), networkConfig),
       ).resolves.toBe(true);
+      expect(axiosGetSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('accepts a node from the monitor joining list when it is not in archiver standby', async () => {
+      const axiosGetSpy = jest
+        .spyOn(axios, 'get')
+        .mockImplementation((url: any) => {
+          const requestUrl = String(url);
+          if (requestUrl.includes('/full-nodelist?standbyOnly=true')) {
+            return Promise.resolve({ data: { nodeList: [] } } as any);
+          }
+
+          if (requestUrl === 'http://monitor.example/api/report') {
+            return Promise.resolve(monitorReport([joiningNodeAddress]) as any);
+          }
+
+          return Promise.reject(new Error(`Unexpected URL: ${requestUrl}`));
+        });
+
+      await expect(
+        service.isEligibleNode(joiningNodeAddress.toUpperCase(), networkConfig),
+      ).resolves.toBe(true);
+      expect(axiosGetSpy).toHaveBeenLastCalledWith(
+        'http://monitor.example/api/report',
+        { timeout: 5_000 },
+      );
     });
 
     it('rejects a node missing from both archiver standby and monitor joining lists', async () => {
@@ -91,35 +116,72 @@ describe('BlockchainService', () => {
         }
 
         if (requestUrl === 'http://monitor.example/api/report') {
-          return Promise.resolve({
-            data: {
-              nodes: {
-                joining: {
-                  '9c267a6ba0efdfd189f945fa95387226ec66b12e67d43ca466a2aaee8ad4b2bb':
-                    {},
-                },
-              },
-            },
-          } as any);
+          return Promise.resolve(monitorReport([joiningNodeAddress]) as any);
         }
 
         return Promise.reject(new Error(`Unexpected URL: ${requestUrl}`));
       });
 
       await expect(
-        service.isValidStandbyNode(
-          'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-          {
-            networkId: 'testnet',
-            protocols: 'http',
-            host: 'localhost:9001',
-            faucetAddress: 'faucet-address',
-            faucetPrivateKey: 'faucet-private-key',
-            archiverUrl: 'http://archiver.example',
-            monitorUrl: 'http://monitor.example/',
-          },
-        ),
+        service.isEligibleNode(missingNodeAddress, networkConfig),
       ).resolves.toBe(false);
+    });
+
+    it.each([
+      [joiningNodeAddress, true],
+      [missingNodeAddress, false],
+    ])(
+      'falls back to the monitor after an archiver error for %s',
+      async (nodeAddress, expected) => {
+        jest.spyOn(axios, 'get').mockImplementation((url: any) => {
+          if (String(url).includes('/full-nodelist?standbyOnly=true')) {
+            return Promise.reject(new Error('archiver unavailable'));
+          }
+
+          return Promise.resolve(monitorReport([joiningNodeAddress]) as any);
+        });
+
+        await expect(
+          service.isEligibleNode(nodeAddress, networkConfig),
+        ).resolves.toBe(expected);
+      },
+    );
+
+    it('rejects a malformed monitor report without throwing', async () => {
+      jest.spyOn(axios, 'get').mockResolvedValue({ data: { nodes: {} } });
+
+      await expect(
+        service.isValidJoiningNode(joiningNodeAddress, networkConfig),
+      ).resolves.toBe(false);
+    });
+
+    it('rejects a monitor timeout without throwing', async () => {
+      const axiosGetSpy = jest
+        .spyOn(axios, 'get')
+        .mockRejectedValue(new Error('timeout'));
+
+      await expect(
+        service.isValidJoiningNode(joiningNodeAddress, networkConfig),
+      ).resolves.toBe(false);
+      expect(axiosGetSpy).toHaveBeenCalledWith(
+        'http://monitor.example/api/report',
+        { timeout: 5_000 },
+      );
+    });
+
+    it('caches a monitor report for five seconds and refetches after expiry', async () => {
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(1_000);
+      const axiosGetSpy = jest
+        .spyOn(axios, 'get')
+        .mockResolvedValue(monitorReport([joiningNodeAddress]));
+
+      await service.isValidJoiningNode(joiningNodeAddress, networkConfig);
+      await service.isValidJoiningNode(joiningNodeAddress, networkConfig);
+      expect(axiosGetSpy).toHaveBeenCalledTimes(1);
+
+      nowSpy.mockReturnValue(6_001);
+      await service.isValidJoiningNode(joiningNodeAddress, networkConfig);
+      expect(axiosGetSpy).toHaveBeenCalledTimes(2);
     });
   });
 });
