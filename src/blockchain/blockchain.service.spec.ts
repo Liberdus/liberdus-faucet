@@ -183,5 +183,71 @@ describe('BlockchainService', () => {
       await service.isValidJoiningNode(joiningNodeAddress, networkConfig);
       expect(axiosGetSpy).toHaveBeenCalledTimes(2);
     });
+
+    it('isolates cached joining reports by monitor URL', async () => {
+      const secondNetworkConfig = {
+        ...networkConfig,
+        networkId: 'other-network',
+        monitorUrl: 'http://other-monitor.example',
+      };
+      const axiosGetSpy = jest
+        .spyOn(axios, 'get')
+        .mockResolvedValueOnce(monitorReport([joiningNodeAddress]))
+        .mockResolvedValueOnce(monitorReport([]));
+
+      await expect(
+        service.isValidJoiningNode(joiningNodeAddress, networkConfig),
+      ).resolves.toBe(true);
+      await expect(
+        service.isValidJoiningNode(joiningNodeAddress, secondNetworkConfig),
+      ).resolves.toBe(false);
+      expect(axiosGetSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not cache a failed monitor request', async () => {
+      const axiosGetSpy = jest
+        .spyOn(axios, 'get')
+        .mockRejectedValueOnce(new Error('timeout'))
+        .mockResolvedValueOnce(monitorReport([joiningNodeAddress]));
+
+      await expect(
+        service.isValidJoiningNode(joiningNodeAddress, networkConfig),
+      ).resolves.toBe(false);
+      await expect(
+        service.isValidJoiningNode(joiningNodeAddress, networkConfig),
+      ).resolves.toBe(true);
+      expect(axiosGetSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not cache a malformed monitor report', async () => {
+      const axiosGetSpy = jest
+        .spyOn(axios, 'get')
+        .mockResolvedValueOnce({ data: { nodes: {} } })
+        .mockResolvedValueOnce(monitorReport([joiningNodeAddress]));
+
+      await expect(
+        service.isValidJoiningNode(joiningNodeAddress, networkConfig),
+      ).resolves.toBe(false);
+      await expect(
+        service.isValidJoiningNode(joiningNodeAddress, networkConfig),
+      ).resolves.toBe(true);
+      expect(axiosGetSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('normalizes a trailing slash in the monitor URL', async () => {
+      const axiosGetSpy = jest
+        .spyOn(axios, 'get')
+        .mockResolvedValue(monitorReport([]));
+
+      await service.isValidJoiningNode(joiningNodeAddress, {
+        ...networkConfig,
+        monitorUrl: 'http://monitor.example/',
+      });
+
+      expect(axiosGetSpy).toHaveBeenCalledWith(
+        'http://monitor.example/api/report',
+        { timeout: 5_000 },
+      );
+    });
   });
 });
