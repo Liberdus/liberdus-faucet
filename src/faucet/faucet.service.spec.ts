@@ -1,9 +1,18 @@
 import { BadRequestException } from '@nestjs/common';
+import * as path from 'path';
 import { FaucetService } from './faucet.service';
 import { FaucetRequestDto } from '../common/dto/faucet-request.dto';
 
 describe('FaucetService network configuration', () => {
   let readFileSyncMock: jest.SpyInstance;
+  const validNetworkConfig = (): Record<string, string> => ({
+    protocols: 'http',
+    host: 'localhost:9001',
+    faucetAddress: 'faucet-address',
+    faucetPrivateKey: 'faucet-private-key',
+    archiverUrl: 'http://archiver.example',
+    monitorUrl: 'http://monitor.example',
+  });
 
   beforeEach(() => {
     readFileSyncMock = jest.spyOn(require('fs'), 'readFileSync');
@@ -13,41 +22,109 @@ describe('FaucetService network configuration', () => {
     readFileSyncMock.mockRestore();
   });
 
-  it.each(['archiverUrl', 'monitorUrl'])(
-    'rejects a network missing required %s',
-    (missingField) => {
-      const networkConfig: Record<string, string> = {
-        protocols: 'http',
-        host: 'localhost:9001',
-        faucetAddress: 'faucet-address',
-        faucetPrivateKey: 'faucet-private-key',
-        archiverUrl: 'http://archiver.example',
-        monitorUrl: 'http://monitor.example',
-      };
-      delete networkConfig[missingField];
+  it.each([
+    'protocols',
+    'host',
+    'faucetAddress',
+    'faucetPrivateKey',
+    'archiverUrl',
+    'monitorUrl',
+  ])('rejects a network missing required %s', (missingField) => {
+    const networkConfig = validNetworkConfig();
+    delete networkConfig[missingField];
+    readFileSyncMock.mockReturnValue(
+      JSON.stringify({ testnet: networkConfig }),
+    );
+
+    expect(() => new FaucetService({} as any, {} as any)).toThrow(
+      `Network 'testnet' is missing required configuration: ${missingField}`,
+    );
+  });
+
+  it.each([
+    'protocols',
+    'host',
+    'faucetAddress',
+    'faucetPrivateKey',
+    'archiverUrl',
+    'monitorUrl',
+  ])('rejects an empty required %s', (emptyField) => {
+    const networkConfig = validNetworkConfig();
+    networkConfig[emptyField] = ' ';
+    readFileSyncMock.mockReturnValue(
+      JSON.stringify({ testnet: networkConfig }),
+    );
+
+    expect(() => new FaucetService({} as any, {} as any)).toThrow(
+      `Network 'testnet' is missing required configuration: ${emptyField}`,
+    );
+  });
+
+  it.each(['privateFaucetAddress', 'privateFaucetPrivateKey'])(
+    'rejects partial private faucet configuration containing only %s',
+    (privateField) => {
+      const networkConfig = validNetworkConfig();
+      networkConfig[privateField] = 'private-value';
       readFileSyncMock.mockReturnValue(
         JSON.stringify({ testnet: networkConfig }),
       );
 
-      expect(
-        () => new FaucetService({} as any, {} as any),
-      ).toThrow(
-        `Network 'testnet' is missing required configuration: ${missingField}`,
+      expect(() => new FaucetService({} as any, {} as any)).toThrow(
+        `Network 'testnet' must configure privateFaucetAddress and privateFaucetPrivateKey together`,
       );
     },
   );
 
-  it('loads a network containing both required endpoint URLs', () => {
+  it.each(['privateFaucetAddress', 'privateFaucetPrivateKey'])(
+    'rejects an empty private faucet field %s',
+    (privateField) => {
+      const networkConfig = {
+        ...validNetworkConfig(),
+        privateFaucetAddress: 'private-address',
+        privateFaucetPrivateKey: 'private-key',
+        [privateField]: ' ',
+      };
+      readFileSyncMock.mockReturnValue(
+        JSON.stringify({ testnet: networkConfig }),
+      );
+
+      expect(() => new FaucetService({} as any, {} as any)).toThrow(
+        `Network 'testnet' must configure privateFaucetAddress and privateFaucetPrivateKey together`,
+      );
+    },
+  );
+
+  it('loads a complete network configuration', () => {
     readFileSyncMock.mockReturnValue(
-      JSON.stringify({
-        testnet: {
-          archiverUrl: 'http://archiver.example',
-          monitorUrl: 'http://monitor.example',
-        },
-      }),
+      JSON.stringify({ testnet: validNetworkConfig() }),
     );
 
     expect(() => new FaucetService({} as any, {} as any)).not.toThrow();
+  });
+
+  it('loads the network configuration from NETWORKS_CONFIG_PATH', () => {
+    const previousConfigPath = process.env.NETWORKS_CONFIG_PATH;
+    process.env.NETWORKS_CONFIG_PATH = 'networks.example.json';
+    readFileSyncMock.mockReturnValue(
+      JSON.stringify({
+        testnet: validNetworkConfig(),
+      }),
+    );
+
+    try {
+      new FaucetService({} as any, {} as any);
+
+      expect(readFileSyncMock).toHaveBeenCalledWith(
+        path.resolve(process.cwd(), 'networks.example.json'),
+        'utf-8',
+      );
+    } finally {
+      if (previousConfigPath === undefined) {
+        delete process.env.NETWORKS_CONFIG_PATH;
+      } else {
+        process.env.NETWORKS_CONFIG_PATH = previousConfigPath;
+      }
+    }
   });
 });
 
@@ -70,7 +147,7 @@ describe('FaucetService IP cooldown', () => {
   beforeEach(() => {
     blockchainService = {
       verifyEthereumTx: jest.fn().mockReturnValue(true),
-      isValidStandbyNode: jest.fn().mockResolvedValue(false),
+      isEligibleNode: jest.fn().mockResolvedValue(false),
       getAccount: jest
         .fn()
         .mockResolvedValue({ data: { balance: { value: '0' } } }),
@@ -159,7 +236,7 @@ describe('FaucetService IP cooldown', () => {
       nodeAddress,
     };
 
-    blockchainService.isValidStandbyNode.mockResolvedValue(true);
+    blockchainService.isEligibleNode.mockResolvedValue(true);
     blockchainService.getAccount.mockImplementation((address: string) => {
       if (address === nodeAddress) {
         return Promise.resolve({
@@ -184,6 +261,30 @@ describe('FaucetService IP cooldown', () => {
     });
   });
 
+  it('rejects a second node faucet request from the same IP within 24 hours', async () => {
+    const firstNodeRequest: FaucetRequestDto = {
+      ...faucetRequest,
+      nodeAddress:
+        '9c267a6ba0efdfd189f945fa95387226ec66b12e67d43ca466a2aaee8ad4b2bb',
+    };
+    const secondNodeRequest: FaucetRequestDto = {
+      ...firstNodeRequest,
+      userAddress:
+        'abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+    };
+    blockchainService.isEligibleNode.mockResolvedValue(true);
+    blockchainService.getAccount.mockResolvedValue({
+      stakeLock: { value: '0' },
+      data: { balance: { value: '0' } },
+    });
+
+    await service.processFaucetRequest(firstNodeRequest, '203.0.113.13');
+
+    await expect(
+      service.processFaucetRequest(secondNodeRequest, '203.0.113.13'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
   it('processes a node faucet request when the node is standby or joining eligible', async () => {
     const nodeAddress =
       '9c267a6ba0efdfd189f945fa95387226ec66b12e67d43ca466a2aaee8ad4b2bb';
@@ -192,7 +293,7 @@ describe('FaucetService IP cooldown', () => {
       nodeAddress,
     };
 
-    blockchainService.isValidStandbyNode.mockResolvedValue(true);
+    blockchainService.isEligibleNode.mockResolvedValue(true);
     blockchainService.getAccount.mockImplementation((address: string) => {
       if (address === nodeAddress) {
         return Promise.resolve({
@@ -214,7 +315,7 @@ describe('FaucetService IP cooldown', () => {
       message: `Successfully sent 10 tokens to ${faucetRequest.userAddress}`,
     });
 
-    expect(blockchainService.isValidStandbyNode).toHaveBeenCalledWith(
+    expect(blockchainService.isEligibleNode).toHaveBeenCalledWith(
       nodeAddress,
       expect.objectContaining({ networkId: 'testnet' }),
     );
@@ -236,7 +337,7 @@ describe('FaucetService IP cooldown', () => {
         'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
     };
 
-    blockchainService.isValidStandbyNode.mockResolvedValue(false);
+    blockchainService.isEligibleNode.mockResolvedValue(false);
 
     await expect(
       service.processFaucetRequest(nodeFaucetRequest, '203.0.113.21'),

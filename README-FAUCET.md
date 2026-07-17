@@ -21,14 +21,17 @@ The application consists of three main modules:
 ## API Endpoints
 
 ### POST /faucet
+
 Submit a faucet request.
 
 **Request Body:**
+
 ```json
 {
   "nodeAddress": "string",
-  "username": "string", 
+  "username": "string",
   "userAddress": "string",
+  "networkId": "string",
   "sign": {
     "owner": "string",
     "sig": "string"
@@ -37,6 +40,7 @@ Submit a faucet request.
 ```
 
 **Response:**
+
 ```json
 {
   "success": boolean,
@@ -47,34 +51,41 @@ Submit a faucet request.
 ```
 
 ### GET /faucet/health
+
 Health check endpoint.
 
 ### GET /faucet/stats
+
 Get faucet statistics.
 
 ### GET /faucet/request/:id
+
 Get specific faucet request details.
 
 ## Setup
 
 1. **Install dependencies:**
+
 ```bash
 npm install
 ```
 
 2. **Configure environment:**
+
 ```bash
 cp .env.example .env
 # Edit .env with your configuration
 ```
 
 3. **Configure networks:**
+
 ```bash
 cp networks.example.json networks.json
 # Edit networks.json with the endpoints and faucet credentials for each network
 ```
 
 4. **Start the server:**
+
 ```bash
 npm run start:dev
 ```
@@ -89,7 +100,7 @@ BLOCKCHAIN_PROTOCOL=http
 BLOCKCHAIN_HOST=localhost:9001
 NETWORK_ID=1
 
-# Faucet Configuration  
+# Faucet Configuration
 FAUCET_AMOUNT=10
 FAUCET_ADDRESS=your_faucet_address
 FAUCET_PRIVATE_KEY=your_private_key
@@ -109,10 +120,12 @@ PORT=3000
 
 ## Network Configuration
 
-`networks.json` is keyed by network ID. Every network must define both
-`archiverUrl` and `monitorUrl`; the application fails to start if either value is
-missing or empty. The faucet appends `/api/report` to `monitorUrl` when it checks
-joining-node eligibility.
+`networks.json` is keyed by network ID. Every network must define non-empty
+`protocols`, `host`, `faucetAddress`, `faucetPrivateKey`, `archiverUrl`, and
+`monitorUrl` values. The application fails to start when any required value is
+missing or empty. If private faucet credentials are configured,
+`privateFaucetAddress` and `privateFaucetPrivateKey` must both be present and
+non-empty.
 
 ```json
 {
@@ -127,17 +140,37 @@ joining-node eligibility.
 }
 ```
 
-Monitor configuration is deliberately network-specific. Global `MONITOR_URL`
-and `MONITOR_REPORT_URL` environment variables are not used.
+Node eligibility checks the archiver standby list first, then checks the
+network's monitor joining list when the node is not in standby or the archiver
+request fails. This monitor fallback during an archiver outage is intentional.
+Monitor requests time out after five seconds, and successfully parsed joining
+lists are cached for five seconds per monitor URL.
+
+IP cooldowns are tracked separately for user and node faucet requests. With the
+default amounts, one IP can receive up to 100 LIB from the user faucet and 10
+LIB from the node faucet during each 24-hour cooldown window, provided all
+other eligibility checks pass.
 
 ## Testing
 
+The e2e suite automatically loads `networks.example.json`, so a local
+`networks.json` is not required:
+
+```bash
+npm run test:e2e
+```
+
+Set `NETWORKS_CONFIG_PATH` to use a different network configuration file. A
+relative path is resolved from the application's working directory.
+
 Test the API manually:
+
 ```bash
 node test-api.js
 ```
 
 Or use curl:
+
 ```bash
 # Health check
 curl http://localhost:3000/faucet/health
@@ -150,8 +183,9 @@ curl -X POST http://localhost:3000/faucet \
   -H "Content-Type: application/json" \
   -d '{
     "nodeAddress": "node123",
-    "username": "testuser", 
+    "username": "testuser",
     "userAddress": "0x742d35Cc6635C0532925a3b8D4C01c3444fb6C1f",
+    "networkId": "testnet",
     "sign": {
       "owner": "742d35cc6635c0532925a3b8d4c01c3444fb6c1f",
       "sig": "0x1234...abcdef"

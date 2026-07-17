@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from './../src/app.module';
+import { BlockchainService } from './../src/blockchain/blockchain.service';
 
 describe('Faucet API (e2e)', () => {
   let app: INestApplication;
@@ -9,7 +10,21 @@ describe('Faucet API (e2e)', () => {
   beforeEach(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(BlockchainService)
+      .useValue({
+        verifyEthereumTx: jest.fn().mockReturnValue(true),
+        isEligibleNode: jest.fn().mockResolvedValue(true),
+        getAccount: jest.fn().mockResolvedValue({
+          stakeLock: { value: '0' },
+          data: { balance: { value: '0' } },
+        }),
+        transferFunds: jest
+          .fn()
+          .mockResolvedValue({ success: true, txHash: 'test-tx-hash' }),
+        libToWei: jest.fn((amount: number) => BigInt(amount * 10 ** 18)),
+      })
+      .compile();
 
     app = moduleFixture.createNestApplication();
     app.useGlobalPipes(new ValidationPipe());
@@ -54,6 +69,7 @@ describe('Faucet API (e2e)', () => {
       username: 'testuser',
       userAddress:
         '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+      networkId: 'testnet',
       sign: {
         owner: 'test-owner',
         sig: 'test-signature',
